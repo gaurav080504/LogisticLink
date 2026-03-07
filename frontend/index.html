@@ -1,198 +1,205 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>LogisticLink - Route Optimizer</title>
+    <title>LogisticLink Pro - Fleet Optimizer</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-polylinedecorator/1.6.0/leaflet.polylineDecorator.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-polylinedecorator/1.6.0/leaflet.polylineDecorator.min.js"></script>
     <style>
-        #map { height: 500px; width: 100%; border-radius: 10px; }
-        body { font-family: sans-serif; padding: 20px; background: #f4f4f4; }
-        .controls { margin-bottom: 10px; }
-        button { padding: 10px 20px; background: #28a745; color: white; border: none; cursor: pointer; border-radius: 5px; }
-        button:hover { background: #218838; }
-        /* frontend/index.html - Add to <style> section */
-.leaflet-tooltip-own {
-    background: #28a745;
-    color: white;
-    border: none;
-    font-weight: bold;
-    border-radius: 50%;
-    width: 20px;
-    height: 20px;
-    text-align: center;
-}
+        #map { height: 500px; width: 100%; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background: #f0f2f5; }
+        .controls { background: white; padding: 20px; border-radius: 10px; margin-bottom: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        button { padding: 10px 20px; color: white; border: none; cursor: pointer; border-radius: 5px; font-weight: bold; transition: 0.3s; }
+        .btn-solve { background: #28a745; }
+        .btn-solve:hover { background: #218838; }
+        .btn-clear { background: #dc3545; }
+        .btn-manifest { background: #007bff; }
+        input[type="number"] { padding: 8px; border-radius: 5px; border: 1px solid #ccc; width: 60px; }
+        
+        .stats-panel { margin-top: 15px; display: flex; gap: 20px; flex-wrap: wrap; }
+        .stat-card { background: #fff; padding: 10px 15px; border-radius: 8px; border-left: 5px solid #007bff; min-width: 150px; }
+        .comparison-box { 
+            margin-top: 15px; padding: 15px; border-radius: 8px; 
+            background: #e9ecef; display: none; border: 1px solid #dee2e6;
+        }
+        
+        .leaflet-tooltip-own {
+            background: #28a745; color: white; border: none; font-weight: bold;
+            border-radius: 50%; width: 22px; height: 22px; text-align: center; line-height: 22px;
+        }
     </style>
 </head>
 <body>
-    <h2>LogisticLink MVP</h2>
- <div class="controls">
-    <button onclick="solveRoute()">Find Optimal Route</button>
-    <button onclick="clearMarkers()" style="background:#dc3545">Clear Map</button>
-    <button onclick="downloadManifest()" style="background:#007bff">Download Manifest</button>
-    <div style="margin-top: 10px; background: white; padding: 10px; border-radius: 5px; display: inline-block;">
-        <strong>Stats:</strong> 
-        <span id="stat-dist">Distance: -- km</span> | 
-        <span id="stat-time">Time: -- ms</span>
+    <h2>LogisticLink Pro: Fleet Management System</h2>
+
+    <div class="controls">
+        <div style="display: flex; gap: 15px; align-items: center; margin-bottom: 15px;">
+            <div>
+                <label><b>Fleet Size:</b></label>
+                <input type="number" id="vehicle-count" value="1" min="1" max="5">
+            </div>
+            <button class="btn-solve" onclick="solveRoute()">Optimize Fleet</button>
+            <button class="btn-clear" onclick="clearMarkers()">Clear Map</button>
+            <button class="btn-manifest" onclick="downloadManifest()">Export Manifest</button>
+        </div>
+
+        <div class="stats-panel">
+            <div class="stat-card">
+                <strong>Total Distance</strong><br>
+                <span id="stat-dist">-- km</span>
+            </div>
+            <div class="stat-card" style="border-left-color: #6f42c1;">
+                <strong>Compute Time</strong><br>
+                <span id="stat-time">-- ms</span>
+            </div>
+        </div>
+
+        <div id="comparison-box" class="comparison-box">
+            <strong>🚀 Algorithm Efficiency (GA vs Brute Force)</strong>
+            <p id="efficiency-text" style="margin: 5px 0 0 0; font-size: 0.9em;"></p>
+        </div>
     </div>
-    <p>Click on the map to add delivery stops!</p>
-</div>
+
     <div id="map"></div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-       // 1. Initialize Map
         var map = L.map('map').setView([19.0760, 72.8777], 11); 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
-        // Global State
         var markers = [];
-        var routeLayer = null;
-        var arrowLayer = null; 
-        var lastResultIndices = [];
-        var lastResultDist = 0;
+        var routeLayers = [];
+        var arrowLayers = [];
+        var fleetResults = [];
+        const vehicleColors = ['#007bff', '#28a745', '#ffc107', '#e83e8c', '#6f42c1'];
 
-        // 2. Add marker on click
         map.on('click', function(e) {
             var marker = L.marker([e.latlng.lat, e.latlng.lng]).addTo(map);
             marker.isPriority = false; 
 
-            // Right-click to toggle priority
             marker.on('contextmenu', function(f) {
                 marker.isPriority = !marker.isPriority;
-                if (marker.isPriority) {
-                    marker.getElement().style.filter = "hue-rotate(120deg) saturate(3)"; 
-                    marker.bindPopup("<b>High Priority Stop</b>").openPopup();
-                } else {
-                    marker.getElement().style.filter = "none";
-                    marker.closePopup();
-                }
+                marker.getElement().style.filter = marker.isPriority ? "hue-rotate(120deg) saturate(3)" : "none";
+                if(marker.isPriority) marker.bindPopup("<b>High Priority Stop</b>").openPopup();
+                else marker.closePopup();
             });
             markers.push(marker);
         });
 
-        // 3. Solve Route
         async function solveRoute() {
-            if (markers.length < 3) {
-                alert("Please add at least 3 stops!");
-                return;
-            }
-
+            if (markers.length < 3) { return alert("Please add at least 3 stops!"); }
+            
+            const vehicleCount = document.getElementById('vehicle-count').value;
             const locations = markers.map((m, index) => ({
-                id: index,
-                lat: m.getLatLng().lat,
-                lon: m.getLatLng().lng,
-                priority: m.isPriority
+                id: index, lat: m.getLatLng().lat, lon: m.getLatLng().lng, priority: m.isPriority
             }));
-
-            const startTime = performance.now();
 
             try {
                 const response = await fetch('http://127.0.0.1:5000/solve', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ locations })
+                    body: JSON.stringify({ locations, vehicles: vehicleCount })
                 });
 
                 const result = await response.json();
-                const endTime = performance.now();
+                fleetResults = result.vehicles;
 
-                // Save results for manifest
-                lastResultIndices = result.route_indices;
-                lastResultDist = (result.distance / 1000).toFixed(2);
+                // Update Performance Stats
+                let totalDist = 0;
+                let totalMs = 0;
+                fleetResults.forEach(v => {
+                    totalDist += v.distance;
+                    totalMs += v.ga_time_ms;
+                });
 
-                // Update Stats UI
-                document.getElementById('stat-dist').innerText = `Distance: ${lastResultDist} km`;
-                document.getElementById('stat-time').innerText = `API Response: ${Math.round(endTime - startTime)}ms`;
+                // Convert the meters from the backend into kilometers for the UI
+document.getElementById('stat-dist').innerText = `${(totalDist / 1000).toFixed(2)} km`;
+                document.getElementById('stat-time').innerText = `${totalMs.toFixed(2)} ms`;
 
-                drawRoute(result.route_indices);
+                // Show Comparison
+                const compBox = document.getElementById('comparison-box');
+                compBox.style.display = 'block';
+                const permutations = factorial(locations.length - 1);
+                document.getElementById('efficiency-text').innerHTML = 
+                    `The AI optimized <b>${locations.length}</b> stops. <br>` +
+                    `GA checked ~50,000 routes vs Brute Force which would require <b>${permutations.toLocaleString()}</b> checks.`;
+
+                drawAllRoutes(fleetResults);
             } catch (error) {
-                console.error("Error connecting to the backend:", error);
-                alert("Backend not responding. Is server.py running?");
+                alert("Backend Error: Check if server.py is running.");
             }
         }
 
-        // 4. Draw Route with Arrows
-        function drawRoute(indices) {
-            const routeCoords = indices.map(i => markers[i].getLatLng());
-            const query = routeCoords.map(c => `${c.lng},${c.lat}`).join(';');
+        function drawAllRoutes(vehicles) {
+            // Clear existing
+            routeLayers.forEach(l => map.removeLayer(l));
+            arrowLayers.forEach(l => map.removeLayer(l));
+            routeLayers = []; arrowLayers = [];
+            markers.forEach(m => m.unbindTooltip());
 
-            fetch(`https://router.project-osrm.org/route/v1/driving/${query}?overview=full&geometries=geojson`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.code === 'Ok') {
-                        // Clear Tooltips
-                        markers.forEach(m => m.unbindTooltip());
-                        indices.forEach((markerIndex, order) => {
-                            markers[markerIndex].bindTooltip(`${order + 1}`, {
-                                permanent: true, 
-                                direction: 'top',
-                                className: 'leaflet-tooltip-own'
-                            }).openTooltip();
-                        });
+            vehicles.forEach((v, index) => {
+                const color = vehicleColors[index % vehicleColors.length];
+                const coords = v.route_indices.map(id => markers[id].getLatLng());
+                const query = coords.map(c => `${c.lng},${c.lat}`).join(';');
 
-                        // Clear Old Route & Arrows
-                        if (routeLayer) map.removeLayer(routeLayer);
-                        if (arrowLayer) map.removeLayer(arrowLayer);
+                // Label Markers
+                v.route_indices.forEach((mIdx, order) => {
+                    markers[mIdx].bindTooltip(`${order + 1}`, {
+                        permanent: true, direction: 'top', className: 'leaflet-tooltip-own'
+                    }).openTooltip();
+                });
 
-                        // Draw Road Path
-                        routeLayer = L.geoJSON(data.routes[0].geometry, {
-                            style: { color: '#007bff', weight: 5, opacity: 0.7 }
-                        }).addTo(map);
+                fetch(`https://router.project-osrm.org/route/v1/driving/${query}?overview=full&geometries=geojson`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.code === 'Ok') {
+                            let rLayer = L.geoJSON(data.routes[0].geometry, {
+                                style: { color: color, weight: 6, opacity: 0.6 }
+                            }).addTo(map);
+                            routeLayers.push(rLayer);
 
-                        // Draw Directional Arrows
-                        arrowLayer = L.polylineDecorator(routeLayer, {
-                            patterns: [
-                                {
-                                    offset: '5%', 
-                                    repeat: '150px', 
-                                    symbol: L.Symbol.arrowHead({
-                                        pixelSize: 12,
-                                        polygon: false,
-                                        pathOptions: { stroke: true, color: '#007bff', weight: 3 }
-                                    })
-                                }
-                            ]
-                        }).addTo(map);
-
-                        map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
-                    }
-                })
-                .catch(err => console.error("OSRM Error:", err));
+                            let aLayer = L.polylineDecorator(rLayer, {
+                                patterns: [{
+                                    offset: '10%', repeat: '120px',
+                                    symbol: L.Symbol.arrowHead({ pixelSize: 12, pathOptions: { color: color, fillOpacity: 1, weight: 0 }})
+                                }]
+                            }).addTo(map);
+                            arrowLayers.push(aLayer);
+                        }
+                    });
+            });
         }
 
-        // 5. Clear Map
         function clearMarkers() {
             markers.forEach(m => map.removeLayer(m));
             markers = [];
-            if(routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
-            if(arrowLayer) { map.removeLayer(arrowLayer); arrowLayer = null; }
-            document.getElementById('stat-dist').innerText = `Distance: -- km`;
-            document.getElementById('stat-time').innerText = `API Response: -- ms`;
-            lastResultIndices = [];
-            lastResultDist = 0;
+            routeLayers.forEach(l => map.removeLayer(l));
+            arrowLayers.forEach(l => map.removeLayer(l));
+            document.getElementById('stat-dist').innerText = '-- km';
+            document.getElementById('stat-time').innerText = '-- ms';
+            document.getElementById('comparison-box').style.display = 'none';
         }
 
-        // 6. Manifest Download
-        function downloadManifest() {
-            if (lastResultIndices.length === 0) {
-                alert("Please solve a route first!");
-                return;
-            }
-            let manifest = `LOGISTICLINK DELIVERY MANIFEST\n`;
-            manifest += `Total Estimated Distance: ${lastResultDist} km\n`;
-            manifest += `-------------------------------------------\n`;
-            
-            lastResultIndices.forEach((idx, order) => {
-                const loc = markers[idx].getLatLng();
-                const priority = markers[idx].isPriority ? "[PRIORITY] " : "";
-                manifest += `Stop ${order + 1}: ${priority}Lat: ${loc.lat.toFixed(5)}, Lon: ${loc.lng.toFixed(5)}\n`;
-            });
+        function factorial(n) {
+            if (n === 0 || n === 1) return 1;
+            let res = 1;
+            for (let i = 2; i <= n; i++) res *= i;
+            return res;
+        }
 
-            const blob = new Blob([manifest], { type: 'text/plain' });
+        function downloadManifest() {
+            if (fleetResults.length === 0) return alert("Solve a route first!");
+            let text = "LOGISTICLINK PRO - FLEET MANIFEST\n==============================\n";
+            fleetResults.forEach((v, i) => {
+                text += `\nVEHICLE #${i+1} (Distance: ${v.distance} km)\n`;
+                v.route_indices.forEach((mIdx, order) => {
+                    const pos = markers[mIdx].getLatLng();
+                    text += `${order+1}. [Lat: ${pos.lat.toFixed(5)}, Lon: ${pos.lng.toFixed(5)}]\n`;
+                });
+            });
+            const blob = new Blob([text], { type: 'text/plain' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
-            link.download = 'delivery_route.txt';
+            link.download = 'Fleet_Manifest.txt';
             link.click();
         }
     </script>
