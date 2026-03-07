@@ -9,9 +9,10 @@
         #map { height: 500px; width: 100%; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background: #f0f2f5; }
         .controls { background: white; padding: 20px; border-radius: 10px; margin-bottom: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        button { padding: 10px 20px; color: white; border: none; cursor: pointer; border-radius: 5px; font-weight: bold; transition: 0.3s; }
+        button { padding: 10px 20px; color: white; border: none; cursor: pointer; border-radius: 5px; font-weight: bold; transition: 0.3s; margin-right: 5px; }
         .btn-solve { background: #28a745; }
         .btn-solve:hover { background: #218838; }
+        .btn-nav { background: #4285F4; } /* Google Blue */
         .btn-clear { background: #dc3545; }
         .btn-manifest { background: #007bff; }
         input[type="number"] { padding: 8px; border-radius: 5px; border: 1px solid #ccc; width: 60px; }
@@ -33,12 +34,13 @@
     <h2>LogisticLink Pro: Fleet Management System</h2>
 
     <div class="controls">
-        <div style="display: flex; gap: 15px; align-items: center; margin-bottom: 15px;">
+        <div style="display: flex; gap: 15px; align-items: center; margin-bottom: 15px; flex-wrap: wrap;">
             <div>
                 <label><b>Fleet Size:</b></label>
                 <input type="number" id="vehicle-count" value="1" min="1" max="5">
             </div>
             <button class="btn-solve" onclick="solveRoute()">Optimize Fleet</button>
+            <button class="btn-nav" onclick="launchGoogleMaps()">🚀 Start Google Maps</button>
             <button class="btn-clear" onclick="clearMarkers()">Clear Map</button>
             <button class="btn-manifest" onclick="downloadManifest()">Export Manifest</button>
         </div>
@@ -63,19 +65,24 @@
     <div id="map"></div>
 
     <script>
+        // 1. Initialize Map centered on Mumbai/Kalyan area
         var map = L.map('map').setView([19.0760, 72.8777], 11); 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
+        // Global State variables
         var markers = [];
         var routeLayers = [];
         var arrowLayers = [];
         var fleetResults = [];
+        var currentOptimizedRoute = []; // Stores ordered Lat/Lon for Google Maps integration
         const vehicleColors = ['#007bff', '#28a745', '#ffc107', '#e83e8c', '#6f42c1'];
 
+        // 2. Add marker on click with Priority feature
         map.on('click', function(e) {
             var marker = L.marker([e.latlng.lat, e.latlng.lng]).addTo(map);
             marker.isPriority = false; 
 
+            // Right-click to toggle high priority status
             marker.on('contextmenu', function(f) {
                 marker.isPriority = !marker.isPriority;
                 marker.getElement().style.filter = marker.isPriority ? "hue-rotate(120deg) saturate(3)" : "none";
@@ -85,15 +92,20 @@
             markers.push(marker);
         });
 
+        // 3. Main Logic: Send locations to Python Backend
         async function solveRoute() {
             if (markers.length < 3) { return alert("Please add at least 3 stops!"); }
             
             const vehicleCount = document.getElementById('vehicle-count').value;
             const locations = markers.map((m, index) => ({
-                id: index, lat: m.getLatLng().lat, lon: m.getLatLng().lng, priority: m.isPriority
+                id: index, 
+                lat: m.getLatLng().lat, 
+                lon: m.getLatLng().lng, 
+                priority: m.isPriority
             }));
 
             try {
+                // Communicating with Flask server.py
                 const response = await fetch('http://127.0.0.1:5000/solve', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -103,19 +115,27 @@
                 const result = await response.json();
                 fleetResults = result.vehicles;
 
-                // Update Performance Stats
+                // SAVE THE ROUTE: Mapping the AI's order to real coordinates for Navigation
+                if (fleetResults.length > 0) {
+                    currentOptimizedRoute = fleetResults[0].route_indices.map(idx => ({
+                        lat: markers[idx].getLatLng().lat,
+                        lng: markers[idx].getLatLng().lng
+                    }));
+                }
+
+                // Update Performance Stats UI
                 let totalDist = 0;
                 let totalMs = 0;
                 fleetResults.forEach(v => {
-                    totalDist += v.distance;
+                    totalDist += v.distance; // distance is in meters from backend
                     totalMs += v.ga_time_ms;
                 });
 
-                // Convert the meters from the backend into kilometers for the UI
-document.getElementById('stat-dist').innerText = `${(totalDist / 1000).toFixed(2)} km`;
+                // FIX: Converting meters to kilometers for realistic display
+                document.getElementById('stat-dist').innerText = `${(totalDist / 1000).toFixed(2)} km`;
                 document.getElementById('stat-time').innerText = `${totalMs.toFixed(2)} ms`;
 
-                // Show Comparison
+                // Show Efficiency Comparison (AI vs Brute Force)
                 const compBox = document.getElementById('comparison-box');
                 compBox.style.display = 'block';
                 const permutations = factorial(locations.length - 1);
@@ -125,12 +145,13 @@ document.getElementById('stat-dist').innerText = `${(totalDist / 1000).toFixed(2
 
                 drawAllRoutes(fleetResults);
             } catch (error) {
-                alert("Backend Error: Check if server.py is running.");
+                alert("Backend Error: Check if server.py is running on Port 5000.");
             }
         }
 
+        // 4. Draw multi-vehicle routes on the map
         function drawAllRoutes(vehicles) {
-            // Clear existing
+            // Clear existing route layers and tooltips
             routeLayers.forEach(l => map.removeLayer(l));
             arrowLayers.forEach(l => map.removeLayer(l));
             routeLayers = []; arrowLayers = [];
@@ -141,22 +162,25 @@ document.getElementById('stat-dist').innerText = `${(totalDist / 1000).toFixed(2
                 const coords = v.route_indices.map(id => markers[id].getLatLng());
                 const query = coords.map(c => `${c.lng},${c.lat}`).join(';');
 
-                // Label Markers
+                // Add numbering to markers to show delivery order (1, 2, 3...)
                 v.route_indices.forEach((mIdx, order) => {
                     markers[mIdx].bindTooltip(`${order + 1}`, {
                         permanent: true, direction: 'top', className: 'leaflet-tooltip-own'
                     }).openTooltip();
                 });
 
+                // Fetching real-world road path from OSRM API
                 fetch(`https://router.project-osrm.org/route/v1/driving/${query}?overview=full&geometries=geojson`)
                     .then(res => res.json())
                     .then(data => {
                         if (data.code === 'Ok') {
+                            // Draw the blue/green/yellow road line
                             let rLayer = L.geoJSON(data.routes[0].geometry, {
                                 style: { color: color, weight: 6, opacity: 0.6 }
                             }).addTo(map);
                             routeLayers.push(rLayer);
 
+                            // Add direction arrows to the line
                             let aLayer = L.polylineDecorator(rLayer, {
                                 patterns: [{
                                     offset: '10%', repeat: '120px',
@@ -169,6 +193,31 @@ document.getElementById('stat-dist').innerText = `${(totalDist / 1000).toFixed(2
             });
         }
 
+        // 5. Integration: Launch the Google Maps app with optimized waypoints
+        function launchGoogleMaps() {
+            if (currentOptimizedRoute.length < 2) {
+                alert("Please optimize a route first!");
+                return;
+            }
+
+            const stops = currentOptimizedRoute;
+            const origin = `${stops[0].lat},${stops[0].lng}`;
+            const destination = `${stops[stops.length - 1].lat},${stops[stops.length - 1].lng}`;
+            
+            let waypoints = "";
+            if (stops.length > 2) {
+                // Formatting intermediate stops for Google Maps URL
+                const middleStops = stops.slice(1, -1);
+                waypoints = middleStops.map(s => `${s.lat},${s.lng}`).join('|');
+            }
+
+            // Official Google Maps Universal URL format
+            const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&waypoints=${encodeURIComponent(waypoints)}&travelmode=driving`;
+
+            window.open(googleMapsUrl, '_blank');
+        }
+
+        // Utility: Clear map for a new session
         function clearMarkers() {
             markers.forEach(m => map.removeLayer(m));
             markers = [];
@@ -179,6 +228,7 @@ document.getElementById('stat-dist').innerText = `${(totalDist / 1000).toFixed(2
             document.getElementById('comparison-box').style.display = 'none';
         }
 
+        // Utility: Calculate factorials for Brute Force comparison stats
         function factorial(n) {
             if (n === 0 || n === 1) return 1;
             let res = 1;
@@ -186,14 +236,16 @@ document.getElementById('stat-dist').innerText = `${(totalDist / 1000).toFixed(2
             return res;
         }
 
+        // Export delivery sequence to a text file
         function downloadManifest() {
             if (fleetResults.length === 0) return alert("Solve a route first!");
             let text = "LOGISTICLINK PRO - FLEET MANIFEST\n==============================\n";
             fleetResults.forEach((v, i) => {
-                text += `\nVEHICLE #${i+1} (Distance: ${v.distance} km)\n`;
+                text += `\nVEHICLE #${i+1} (Distance: ${(v.distance / 1000).toFixed(2)} km)\n`;
                 v.route_indices.forEach((mIdx, order) => {
                     const pos = markers[mIdx].getLatLng();
-                    text += `${order+1}. [Lat: ${pos.lat.toFixed(5)}, Lon: ${pos.lng.toFixed(5)}]\n`;
+                    const priority = markers[mIdx].isPriority ? "[PRIORITY] " : "";
+                    text += `${order+1}. ${priority}[Lat: ${pos.lat.toFixed(5)}, Lon: ${pos.lng.toFixed(5)}]\n`;
                 });
             });
             const blob = new Blob([text], { type: 'text/plain' });
