@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LogisticLink - Route Optimizer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-polylinedecorator/1.6.0/leaflet.polylineDecorator.min.js"></script>
+    <style>
+        #map { height: 500px; width: 100%; border-radius: 10px; }
+        body { font-family: sans-serif; padding: 20px; background: #f4f4f4; }
+        .controls { margin-bottom: 10px; }
+        button { padding: 10px 20px; background: #28a745; color: white; border: none; cursor: pointer; border-radius: 5px; }
+        button:hover { background: #218838; }
+        /* frontend/index.html - Add to <style> section */
+.leaflet-tooltip-own {
+    background: #28a745;
+    color: white;
+    border: none;
+    font-weight: bold;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    text-align: center;
+}
+    </style>
+</head>
+<body>
+    <h2>LogisticLink MVP</h2>
+ <div class="controls">
+    <button onclick="solveRoute()">Find Optimal Route</button>
+    <button onclick="clearMarkers()" style="background:#dc3545">Clear Map</button>
+    <button onclick="downloadManifest()" style="background:#007bff">Download Manifest</button>
+    <div style="margin-top: 10px; background: white; padding: 10px; border-radius: 5px; display: inline-block;">
+        <strong>Stats:</strong> 
+        <span id="stat-dist">Distance: -- km</span> | 
+        <span id="stat-time">Time: -- ms</span>
+    </div>
+    <p>Click on the map to add delivery stops!</p>
+</div>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+       // 1. Initialize Map
+        var map = L.map('map').setView([19.0760, 72.8777], 11); 
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+        // Global State
+        var markers = [];
+        var routeLayer = null;
+        var arrowLayer = null; 
+        var lastResultIndices = [];
+        var lastResultDist = 0;
+
+        // 2. Add marker on click
+        map.on('click', function(e) {
+            var marker = L.marker([e.latlng.lat, e.latlng.lng]).addTo(map);
+            marker.isPriority = false; 
+
+            // Right-click to toggle priority
+            marker.on('contextmenu', function(f) {
+                marker.isPriority = !marker.isPriority;
+                if (marker.isPriority) {
+                    marker.getElement().style.filter = "hue-rotate(120deg) saturate(3)"; 
+                    marker.bindPopup("<b>High Priority Stop</b>").openPopup();
+                } else {
+                    marker.getElement().style.filter = "none";
+                    marker.closePopup();
+                }
+            });
+            markers.push(marker);
+        });
+
+        // 3. Solve Route
+        async function solveRoute() {
+            if (markers.length < 3) {
+                alert("Please add at least 3 stops!");
+                return;
+            }
+
+            const locations = markers.map((m, index) => ({
+                id: index,
+                lat: m.getLatLng().lat,
+                lon: m.getLatLng().lng,
+                priority: m.isPriority
+            }));
+
+            const startTime = performance.now();
+
+            try {
+                const response = await fetch('http://127.0.0.1:5000/solve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ locations })
+                });
+
+                const result = await response.json();
+                const endTime = performance.now();
+
+                // Save results for manifest
+                lastResultIndices = result.route_indices;
+                lastResultDist = (result.distance / 1000).toFixed(2);
+
+                // Update Stats UI
+                document.getElementById('stat-dist').innerText = `Distance: ${lastResultDist} km`;
+                document.getElementById('stat-time').innerText = `API Response: ${Math.round(endTime - startTime)}ms`;
+
+                drawRoute(result.route_indices);
+            } catch (error) {
+                console.error("Error connecting to the backend:", error);
+                alert("Backend not responding. Is server.py running?");
+            }
+        }
+
+        // 4. Draw Route with Arrows
+        function drawRoute(indices) {
+            const routeCoords = indices.map(i => markers[i].getLatLng());
+            const query = routeCoords.map(c => `${c.lng},${c.lat}`).join(';');
+
+            fetch(`https://router.project-osrm.org/route/v1/driving/${query}?overview=full&geometries=geojson`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.code === 'Ok') {
+                        // Clear Tooltips
+                        markers.forEach(m => m.unbindTooltip());
+                        indices.forEach((markerIndex, order) => {
+                            markers[markerIndex].bindTooltip(`${order + 1}`, {
+                                permanent: true, 
+                                direction: 'top',
+                                className: 'leaflet-tooltip-own'
+                            }).openTooltip();
+                        });
+
+                        // Clear Old Route & Arrows
+                        if (routeLayer) map.removeLayer(routeLayer);
+                        if (arrowLayer) map.removeLayer(arrowLayer);
+
+                        // Draw Road Path
+                        routeLayer = L.geoJSON(data.routes[0].geometry, {
+                            style: { color: '#007bff', weight: 5, opacity: 0.7 }
+                        }).addTo(map);
+
+                        // Draw Directional Arrows
+                        arrowLayer = L.polylineDecorator(routeLayer, {
+                            patterns: [
+                                {
+                                    offset: '5%', 
+                                    repeat: '150px', 
+                                    symbol: L.Symbol.arrowHead({
+                                        pixelSize: 12,
+                                        polygon: false,
+                                        pathOptions: { stroke: true, color: '#007bff', weight: 3 }
+                                    })
+                                }
+                            ]
+                        }).addTo(map);
+
+                        map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
+                    }
+                })
+                .catch(err => console.error("OSRM Error:", err));
+        }
+
+        // 5. Clear Map
+        function clearMarkers() {
+            markers.forEach(m => map.removeLayer(m));
+            markers = [];
+            if(routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+            if(arrowLayer) { map.removeLayer(arrowLayer); arrowLayer = null; }
+            document.getElementById('stat-dist').innerText = `Distance: -- km`;
+            document.getElementById('stat-time').innerText = `API Response: -- ms`;
+            lastResultIndices = [];
+            lastResultDist = 0;
+        }
+
+        // 6. Manifest Download
+        function downloadManifest() {
+            if (lastResultIndices.length === 0) {
+                alert("Please solve a route first!");
+                return;
+            }
+            let manifest = `LOGISTICLINK DELIVERY MANIFEST\n`;
+            manifest += `Total Estimated Distance: ${lastResultDist} km\n`;
+            manifest += `-------------------------------------------\n`;
+            
+            lastResultIndices.forEach((idx, order) => {
+                const loc = markers[idx].getLatLng();
+                const priority = markers[idx].isPriority ? "[PRIORITY] " : "";
+                manifest += `Stop ${order + 1}: ${priority}Lat: ${loc.lat.toFixed(5)}, Lon: ${loc.lng.toFixed(5)}\n`;
+            });
+
+            const blob = new Blob([manifest], { type: 'text/plain' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'delivery_route.txt';
+            link.click();
+        }
+    </script>
+</body>
+</html>

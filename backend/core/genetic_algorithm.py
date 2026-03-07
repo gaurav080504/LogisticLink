@@ -2,17 +2,18 @@
 
 import random
 import numpy as np # We'll use numpy for easier math later
-from tsp_solver import calculate_total_distance
+from core.tsp_solver import calculate_total_distance
 
 class GeneticAlgorithm:
-    def __init__(self, distance_matrix, population_size=100, mutation_rate=0.01, generations=500):
+    # backend/core/genetic_algorithm.py
+    def __init__(self, distance_matrix, locations, population_size=100, mutation_rate=0.02, generations=500):
         self.matrix = distance_matrix
+        self.locations = locations # Added this line
         self.pop_size = population_size
         self.mutation_rate = mutation_rate
         self.generations = generations
         self.num_cities = len(distance_matrix)
         self.population = []
-
     def create_initial_population(self):
         """Creates a list of random routes."""
         population = []
@@ -26,11 +27,26 @@ class GeneticAlgorithm:
         self.population = population
         return population
 
+    # backend/core/genetic_algorithm.py
+
     def calculate_fitness(self, route):
-        """The 'Score' of a route. Higher is better."""
+        """Modified fitness to penalize late priority stops."""
         distance = calculate_total_distance(route, self.matrix)
-        # We use 1/distance because GA tries to maximize fitness
-        return 1 / distance
+        
+        penalty = 0
+        # Check the first few stops (e.g., first 20% of the route)
+        priority_threshold = max(2, self.num_cities // 5) 
+        
+        # 'self.locations' needs to be accessible here
+        # For each city in the route after the threshold:
+        for position, city_index in enumerate(route):
+            # We will pass the location objects to the GA class in the next step
+            if getattr(self.locations[city_index], 'priority', False):
+                if position > priority_threshold:
+                    # Add a heavy penalty (extra virtual distance)
+                    penalty += 500  # 500km penalty for being late
+        
+        return 1 / (distance + penalty)
 
 # # --- Test --- Before Selection
 # if __name__ == '__main__':

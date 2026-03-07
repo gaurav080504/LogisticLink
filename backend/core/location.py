@@ -4,16 +4,11 @@ class Location:
     """
     Represents a single delivery stop with a unique ID and geographical coordinates.
     """
-    def __init__(self, id: int, lat: float, lon: float):
-        # A unique identifier for the stop (e.g., Stop 1, Stop 2)
+    def __init__(self, id: int, lat: float, lon: float, priority: bool = False):
         self.id = id
-        
-        # Latitude (e.g., 34.0522)
         self.latitude = lat
-        
-        # Longitude (e.g., -118.2437)
         self.longitude = lon
-
+        self.priority = priority # True if it must be visited early
     def __repr__(self):
         """A string representation for easy printing/debugging."""
         return f"Location(ID={self.id}, Lat={self.latitude:.4f}, Lon={self.longitude:.4f})"
