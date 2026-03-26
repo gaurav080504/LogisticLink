@@ -22,7 +22,7 @@ def run_large_scale_test(num_stops=50):
     
     # 3. Initialize GA
     # We'll use 200 population size and 1000 generations
-    ga = GeneticAlgorithm(matrix, population_size=200, generations=1000, mutation_rate=0.02)
+    ra = GeneticAlgorithm(matrix, population_size=200, generations=1000, mutation_rate=0.02)
     
     # 4. Run Optimization
     print("Starting Evolution...")
